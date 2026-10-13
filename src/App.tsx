@@ -1,7 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ArrowRight, CheckCircle2, MessageCircle, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
+import { cnpjMessage, digits, isValidCnpj, maskCnpj, validPhone } from '../lib/validation.js';
 
 export default function App() {
+  const [cnpjError, setCnpjError] = useState('');
+  const [phoneError, setPhoneError] = useState('');
+  const [submitError, setSubmitError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const sending = useRef(false);
+  const lookupCache = useRef<{cnpj:string; ticket?:string; failed?:boolean; pending?:boolean} | null>(null);
   const [formData, setFormData] = useState({
     nomeProprietario: '',
     nomeLoja: '',
@@ -77,18 +84,27 @@ export default function App() {
   };
 
   const handleCnpjChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let value = e.target.value.replace(/\D/g, '');
-    if (value.length > 14) value = value.slice(0, 14);
-    if (value.length > 12) {
-      value = value.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{1,2})$/, '$1.$2.$3/$4-$5');
-    } else if (value.length > 8) {
-      value = value.replace(/^(\d{2})(\d{3})(\d{3})(\d{1,4})$/, '$1.$2.$3/$4');
-    } else if (value.length > 5) {
-      value = value.replace(/^(\d{2})(\d{3})(\d{1,3})$/, '$1.$2.$3');
-    } else if (value.length > 2) {
-      value = value.replace(/^(\d{2})(\d{1,3})$/, '$1.$2');
-    }
+    const value = maskCnpj(e.target.value);
+    if (lookupCache.current?.cnpj !== digits(value)) lookupCache.current = null;
+    setCnpjError(digits(value).length === 14 ? cnpjMessage(value) : '');
     setFormData((prev) => ({ ...prev, cnpj: value }));
+    if (isValidCnpj(value)) void prefetchCnpj(value);
+  };
+
+  const prefetchCnpj = async (value:string) => {
+    const cnpj = digits(value);
+    if (!isValidCnpj(cnpj) || lookupCache.current?.cnpj === cnpj) return;
+    const entry = {cnpj, pending:true, ticket:undefined as string | undefined, failed:false};
+    lookupCache.current = entry;
+    try {
+      const dryRun = new URLSearchParams(window.location.search).get('dry_run') === '1';
+      const response = await fetch('/api/cnpj', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cnpj, dry_run:dryRun})});
+      const result = await response.json();
+      if (lookupCache.current !== entry) return;
+      entry.ticket = response.ok && typeof result.ticket === 'string' ? result.ticket : undefined;
+      entry.failed = !response.ok || (!result.ticket && !dryRun);
+    } catch { if (lookupCache.current === entry) entry.failed = true; }
+    finally { entry.pending = false; }
   };
 
   const [submitted, setSubmitted] = useState(false);
@@ -119,29 +135,30 @@ export default function App() {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    setSubmitted(true);
-    let messageWithData = `Olá! Tenho uma loja e gostaria de ser parceiro da Republic Paradise e receber o catálogo de atacado.\n\n` +
-      `Nome completo proprietário: ${formData.nomeProprietario}\n` +
-      `Nome da loja: ${formData.nomeLoja}\n` +
-      `WhatsApp: ${formData.whatsapp}\n` +
-      `E-mail: ${formData.email}\n` +
-      `CNPJ: ${formData.cnpj}\n` +
-      `Instagram da loja: ${formData.instagramLoja}\n` +
-      `Tipo de loja: ${formData.tipoLoja}\n` +
-      `Possui loja física?: ${formData.possuiLojaFisica}`;
-
-    if (formData.principaisMarcas) {
-      messageWithData += `\nPrincipais marcas vendidas na loja: ${formData.principaisMarcas}`;
-    }
-
-    const specificWhatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(messageWithData)}`;
-    
-    // Open WhatsApp in a natural, unobtrusive way after submission
-    setTimeout(() => {
-      window.open(specificWhatsappUrl, '_blank', 'noopener,noreferrer');
-    }, 800);
+    if (sending.current) return;
+    const form = e.currentTarget;
+    setSubmitError('');
+    setCnpjError(cnpjMessage(formData.cnpj));
+    setPhoneError(validPhone(formData.whatsapp) ? '' : 'Informe o DDD e um telefone com 10 ou 11 números.');
+    if (!isValidCnpj(formData.cnpj)) { form.querySelector<HTMLInputElement>('#cnpj')?.focus(); return; }
+    if (!validPhone(formData.whatsapp)) { form.querySelector<HTMLInputElement>('#whatsapp')?.focus(); return; }
+    sending.current = true;
+    setIsSubmitting(true);
+    try {
+      const cache = lookupCache.current?.cnpj === digits(formData.cnpj) ? lookupCache.current : null;
+      const dryRun = new URLSearchParams(window.location.search).get('dry_run') === '1';
+      const response = await fetch('/api/leads', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({...formData, url:window.location.href, dry_run:dryRun, cnpj_ticket:cache?.ticket, cnpj_lookup_failed:cache?.failed === true}),
+      });
+      const result = await response.json();
+      if (!response.ok || result.ok !== true) throw new Error('API rejected lead');
+      setSubmitted(true);
+    } catch {
+      setSubmitError('Não foi possível enviar seu cadastro. Seus dados foram mantidos; tente novamente.');
+    } finally { sending.current = false; setIsSubmitting(false); }
   };
 
   return (
@@ -240,12 +257,13 @@ export default function App() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                         {/* 1. Nome completo proprietário */}
                         <div>
-                          <label className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
+                          <label htmlFor="nomeProprietario" className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
                             Nome completo proprietário <span className="text-[#8C3A32]">*</span>
                           </label>
                           <input
                             type="text"
                             required
+                            id="nomeProprietario"
                             value={formData.nomeProprietario}
                             onChange={(e) => setFormData({ ...formData, nomeProprietario: e.target.value })}
                             placeholder="Seu nome completo"
@@ -255,12 +273,13 @@ export default function App() {
 
                         {/* 2. Nome da loja */}
                         <div>
-                          <label className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
+                          <label htmlFor="nomeLoja" className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
                             Nome da loja <span className="text-[#8C3A32]">*</span>
                           </label>
                           <input
                             type="text"
                             required
+                            id="nomeLoja"
                             value={formData.nomeLoja}
                             onChange={(e) => setFormData({ ...formData, nomeLoja: e.target.value })}
                             placeholder="Ex: Boutique Paradise"
@@ -270,11 +289,12 @@ export default function App() {
 
                         {/* 3. WhatsApp */}
                         <div>
-                          <label className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
+                          <label htmlFor="whatsapp" className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
                             WhatsApp <span className="text-[#8C3A32]">*</span>
                           </label>
                           <input
                             type="tel"
+                            id="whatsapp"
                             required
                             value={formData.whatsapp}
                             onChange={(e) => setFormData({ ...formData, whatsapp: e.target.value })}
@@ -285,12 +305,13 @@ export default function App() {
 
                         {/* 4. E-mail */}
                         <div>
-                          <label className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
+                          <label htmlFor="email" className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
                             E-mail <span className="text-[#8C3A32]">*</span>
                           </label>
                           <input
                             type="email"
                             required
+                            id="email"
                             value={formData.email}
                             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                             placeholder="contato@sualoja.com.br"
@@ -300,27 +321,35 @@ export default function App() {
 
                         {/* 5. CNPJ */}
                         <div>
-                          <label className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
+                          <label htmlFor="cnpj" className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
                             CNPJ <span className="text-[#8C3A32]">*</span>
                           </label>
                           <input
                             type="text"
                             required
                             value={formData.cnpj}
+                            id="cnpj"
+                            inputMode="numeric"
+                            maxLength={18}
+                            aria-invalid={Boolean(cnpjError)}
+                            aria-describedby={cnpjError ? 'cnpj-error' : undefined}
+                            onBlur={() => { setCnpjError(cnpjMessage(formData.cnpj)); void prefetchCnpj(formData.cnpj); }}
                             onChange={handleCnpjChange}
                             placeholder="00.000.000/0000-00"
                             className="w-full px-4 py-3.5 bg-white border border-[#cb9f69] text-[#181C2E] text-sm placeholder:text-[#181C2E]/40 focus:outline-none focus:border-[#181C2E] focus:ring-1 focus:ring-[#181C2E] transition-all shadow-[0_1px_2px_rgba(0,0,0,0.02)]"
                           />
+                          {cnpjError && <p id="cnpj-error" role="alert" className="mt-2 text-xs text-[#8C3A32]">{cnpjError}</p>}
                         </div>
 
                         {/* 6. Instagram da loja */}
                         <div>
-                          <label className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
+                          <label htmlFor="instagramLoja" className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
                             Instagram da loja <span className="text-[#8C3A32]">*</span>
                           </label>
                           <input
                             type="text"
                             required
+                            id="instagramLoja"
                             value={formData.instagramLoja}
                             onChange={(e) => setFormData({ ...formData, instagramLoja: e.target.value })}
                             placeholder="@sualoja"
@@ -330,11 +359,12 @@ export default function App() {
 
                         {/* 7. Tipo de loja */}
                         <div>
-                          <label className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
+                          <label htmlFor="tipoLoja" className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
                             Tipo de loja <span className="text-[#8C3A32]">*</span>
                           </label>
                           <select
                             required
+                            id="tipoLoja"
                             value={formData.tipoLoja}
                             onChange={(e) => setFormData({ ...formData, tipoLoja: e.target.value })}
                             className="w-full px-4 py-3.5 bg-white border border-[#cb9f69] text-[#181C2E] text-sm focus:outline-none focus:border-[#181C2E] focus:ring-1 focus:ring-[#181C2E] transition-all cursor-pointer shadow-[0_1px_2px_rgba(0,0,0,0.02)]"
@@ -351,11 +381,12 @@ export default function App() {
 
                         {/* 8. Possui loja física? */}
                         <div>
-                          <label className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
+                          <label htmlFor="possuiLojaFisica" className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
                             Possui loja física? <span className="text-[#8C3A32]">*</span>
                           </label>
                           <select
                             required
+                            id="possuiLojaFisica"
                             value={formData.possuiLojaFisica}
                             onChange={(e) => setFormData({ ...formData, possuiLojaFisica: e.target.value })}
                             className="w-full px-4 py-3.5 bg-white border border-[#cb9f69] text-[#181C2E] text-sm focus:outline-none focus:border-[#181C2E] focus:ring-1 focus:ring-[#181C2E] transition-all cursor-pointer shadow-[0_1px_2px_rgba(0,0,0,0.02)]"
@@ -368,11 +399,12 @@ export default function App() {
 
                         {/* 9. Principais marcas vendidas na sua loja */}
                         <div className="sm:col-span-2">
-                          <label className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
+                          <label htmlFor="principaisMarcas" className="block text-xs uppercase tracking-wider text-[#181C2E] font-semibold mb-2">
                             Principais marcas vendidas na sua loja
                           </label>
                           <input
                             type="text"
+                            id="principaisMarcas"
                             value={formData.principaisMarcas}
                             onChange={(e) => setFormData({ ...formData, principaisMarcas: e.target.value })}
                             placeholder="Ex: Farm, Animale, Osklen, marcas autorais locais..."
@@ -383,11 +415,14 @@ export default function App() {
 
                       {/* Ação de envio */}
                       <div className="pt-4 space-y-3">
+                        {phoneError && <p role="alert" className="text-xs text-[#8C3A32]">{phoneError}</p>}
+                        {submitError && <p role="alert" className="text-sm text-[#8C3A32]">{submitError}</p>}
                         <button
                           type="submit"
+                          disabled={isSubmitting}
                           className="w-full py-3.5 sm:py-4 px-4 sm:px-6 bg-[#181C2E] text-white text-[11px] sm:text-xs leading-snug sm:leading-normal uppercase tracking-[0.09em] sm:tracking-[0.2em] font-semibold hover:bg-[#252b45] active:scale-[0.99] transition-all flex items-center justify-center gap-2 sm:gap-3 cursor-pointer shadow-lg text-center"
                         >
-                          <span>Quero receber o catálogo de atacado</span>
+                          <span>{isSubmitting ? 'Enviando cadastro...' : 'Quero receber o catálogo de atacado'}</span>
                           <ArrowRight className="w-4 h-4 shrink-0" />
                         </button>
                         <p className="text-xs text-[#181C2E]/80 text-center leading-relaxed">
