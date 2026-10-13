@@ -1,0 +1,8 @@
+{
+  "name": "Republic Paradise Landing Page",
+  "description": "Landing Page B2B para lojistas da Republic Paradise. Moda resort autoral feita no Ceará.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

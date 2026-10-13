@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Montserrat', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-serif: 'Montserrat', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-montserrat: 'Montserrat', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+@layer base {
+  *,
+  button,
+  input,
+  optgroup,
+  select,
+  textarea {
+    font-family: 'Montserrat', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    font-family: 'Montserrat', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  
+  body {
+    font-family: 'Montserrat', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color: #262422;
+    background-color: #FAF8F5;
+  }
+
+  .font-serif {
+    font-family: 'Montserrat', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  .font-sans {
+    font-family: 'Montserrat', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+}
+
+@keyframes bounce-gentle {
+  0%, 100% {
+    transform: translateY(0);
+    box-shadow: 0 12px 28px -4px rgba(203, 159, 105, 0.45), 0 8px 14px -4px rgba(0, 0, 0, 0.25);
+  }
+  50% {
+    transform: translateY(-9px);
+    box-shadow: 0 22px 38px -4px rgba(203, 159, 105, 0.6), 0 14px 20px -4px rgba(0, 0, 0, 0.35);
+  }
+}
+
+.animate-bounce-gentle {
+  animation: bounce-gentle 2.2s ease-in-out infinite;
+}
