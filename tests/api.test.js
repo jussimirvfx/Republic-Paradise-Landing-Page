@@ -4,16 +4,35 @@ import { cnpjMessage, isValidCnpj, maskCnpj } from '../lib/validation.js';
 import { lookupCnpj, normalizeCompany } from '../lib/cnpj-central.js';
 import { issueTicket, readTicket } from '../lib/cnpj-ticket.js';
 import { createLeadHandler } from '../api/leads.js';
+import { calculateLeadScore } from '../lib/lead-score.js';
 
-const form = {nomeProprietario:'TESTE Republic',nomeLoja:'Teste Mais Lojistas - Republic',whatsapp:'(11) 99999-0000',email:'teste@example.invalid',cnpj:'60.887.522/0001-89',instagramLoja:'@teste',tipoLoja:'Outro',possuiLojaFisica:'Sim',principaisMarcas:'Marca fictícia'};
+const form = {nomeProprietario:'TESTE Republic',nomeLoja:'Teste Mais Lojistas - Republic',whatsapp:'(11) 99999-0000',email:'teste@example.invalid',cnpj:'60.887.522/0001-89',instagramLoja:'@teste',tipoLoja:'Boutique',possuiLojaFisica:'Sim',principaisMarcas:'Marca fictícia'};
 let ip = 0;
 const request = body => ({method:'POST',headers:{host:'lp.test',origin:'https://lp.test','content-type':'application/json','x-forwarded-for':String(++ip),'x-vercel-oidc-token':'runtime-token'},body});
 const response = () => ({statusCode:0,body:null,setHeader(){},status(n){this.statusCode=n;return this;},json(value){this.body=value;return this;}});
 const secret = 'a'.repeat(64);
 const environment = {N8N_REPUBLIC_PARADISE_WEBHOOK_URL:'https://n8n.agenciavfx.com.br/webhook/mock',CNPJ_PREFETCH_SIGNING_SECRET:secret};
-const company = {razao_social:'Empresa fictícia',situacao_cadastral:'Ativo',data_abertura:'2000-01-01',tempo_cnpj:'26 anos',porte:'Pequeno',cnae_principal:'1234567',descricao_cnae_principal:'Atividade fictícia',endereco:{rua:'Rua fictícia',numero:'10',bairro:'Teste',completo:'Endereço fictício'}};
+const company = {razao_social:'Empresa fictícia',situacao_cadastral:'Ativo',data_abertura:'2000-01-01',tempo_cnpj:'26 anos',porte:'Pequeno',cnae_principal:'1234567',descricao_cnae_principal:'Atividade fictícia',endereco:{rua:'Rua fictícia',numero:'10',bairro:'Teste',cidade:'Cidade',estado:'SP',completo:'Endereço fictício'}};
 const result = {cnpj:'60887522000189',cnpj_valido:true,encontrado:true,fonte:'mock',company,cnpj_validation_status:'cadastral_valid'};
 const recorder = () => {const logs=[];return {logs,info:v=>logs.push(JSON.parse(v)),warn:v=>logs.push(JSON.parse(v)),error:v=>logs.push(JSON.parse(v))};};
+
+test('score usa somente qualificação e cadastro consultado, com razões explícitas', () => {
+  const qualified=calculateLeadScore({...form,tipoLoja:'Boutique'},company,new Date('2026-10-14'));
+  assert.equal(qualified.lead_score,100);
+  assert.equal(qualified.value,100);
+  assert.equal(qualified.qualification_status,'qualificado');
+  assert.deepEqual(qualified.score_breakdown.map(item=>item.points),[40,34,1,25]);
+  const disqualified=calculateLeadScore({...form,tipoLoja:'Loja online',possuiLojaFisica:'Não'},
+    {...company,data_abertura:'14/11/2025'},new Date('2026-10-14'));
+  assert.equal(disqualified.lead_score,21);
+  assert.equal(disqualified.qualification_status,'desqualificado');
+  assert.equal(disqualified.disqualification_reasons.length,3);
+  const magazine=calculateLeadScore({...form,tipoLoja:'Magazine'},company);
+  assert.equal(magazine.score_breakdown[0].points,5);
+  assert.equal(magazine.qualification_status,'desqualificado');
+  const pending=calculateLeadScore(form,null);
+  assert.equal(pending.qualification_status,'pendente_dados_cnpj');
+});
 
 test('checksum, máscara e mensagens silenciosas para CNPJ válido', () => {
   assert.equal(maskCnpj('60887522000189'), '60.887.522/0001-89');
@@ -72,6 +91,10 @@ test('handler aceita antes de consulta e webhook pendentes, reutiliza ticket e c
   assert.equal(captured.company.razao_social,'Empresa fictícia');
   for(const key of ['name','nome_loja','whatsapp','email','cnpj','instagram_loja','tipo_loja','possui_loja_fisica','principais_marcas']) assert.ok(captured[key]);
   assert.equal(captured.whatsapp,'(11) 99999-0000');
+  assert.equal(captured.lead_score,100);
+  assert.equal(captured.value,captured.lead_score);
+  assert.equal(captured.qualification_status,'qualificado');
+  assert.ok(logger.logs.some(item=>item.event==='lead_score_calculated' && item.lead_score===100));
   resolveWebhook({ok:true,status:200});await Promise.all(scheduled);
   assert.equal(logger.logs.at(-1).event,'lead_delivery_completed');
 });

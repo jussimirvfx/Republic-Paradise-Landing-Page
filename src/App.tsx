@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ArrowRight, CheckCircle2, MessageCircle, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
-import { cnpjMessage, digits, isValidCnpj, maskCnpj, validPhone } from '../lib/validation.js';
+import { cnpjMessage, digits, isValidCnpj, maskCnpj, maskPhone, storeTypes, validPhone } from '../lib/validation.js';
 
 export default function App() {
   const [cnpjError, setCnpjError] = useState('');
   const [phoneError, setPhoneError] = useState('');
   const [submitError, setSubmitError] = useState('');
+  const [fieldError, setFieldError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const sending = useRef(false);
   const lookupCache = useRef<{cnpj:string; ticket?:string; failed?:boolean; pending?:boolean} | null>(null);
@@ -129,7 +130,7 @@ export default function App() {
   const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(autoMessage)}`;
 
   const scrollToForm = () => {
-    const el = document.getElementById('formulario');
+    const el = document.getElementById('cta-form');
     if (el) {
       el.scrollIntoView({ behavior: 'smooth' });
     }
@@ -140,10 +141,24 @@ export default function App() {
     if (sending.current) return;
     const form = e.currentTarget;
     setSubmitError('');
+    setFieldError('');
     setCnpjError(cnpjMessage(formData.cnpj));
-    setPhoneError(validPhone(formData.whatsapp) ? '' : 'Informe o DDD e um telefone com 10 ou 11 números.');
-    if (!isValidCnpj(formData.cnpj)) { form.querySelector<HTMLInputElement>('#cnpj')?.focus(); return; }
-    if (!validPhone(formData.whatsapp)) { form.querySelector<HTMLInputElement>('#whatsapp')?.focus(); return; }
+    setPhoneError(validPhone(formData.whatsapp) ? '' : 'Informe um DDD válido e 8 números, ou 9 números começando por 9.');
+    const fields = Array.from(form.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select'));
+    const invalid = fields.find(field => !field.value.trim() || !field.checkValidity()
+      || (field.id === 'cnpj' && !isValidCnpj(field.value))
+      || (field.id === 'whatsapp' && !validPhone(field.value)));
+    if (invalid) {
+      const label = form.querySelector<HTMLLabelElement>(`label[for="${invalid.id}"]`)?.textContent?.replace('*','').trim() || 'Campo';
+      const message = !invalid.value.trim() ? `${label}: preenchimento obrigatório.`
+        : invalid.id === 'cnpj' ? cnpjMessage(invalid.value)
+        : invalid.id === 'whatsapp' ? 'Informe um DDD válido e 8 números, ou 9 números começando por 9.'
+        : `${label}: confira o valor informado.`;
+      setFieldError(message);
+      invalid.scrollIntoView({behavior:'smooth', block:'center'});
+      invalid.focus({preventScroll:true});
+      return;
+    }
     sending.current = true;
     setIsSubmitting(true);
     try {
@@ -215,7 +230,7 @@ export default function App() {
         </section>
 
         {/* Formulário para receber o catálogo */}
-        <section id="formulario" className="py-20 md:py-28 bg-[#cb9f69] border-b border-[#b88c57]">
+        <section id="cta-form" className="py-20 md:py-28 bg-[#cb9f69] border-b border-[#b88c57]">
           <div className="max-w-6xl mx-auto px-6">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-start">
               {/* Lado Esquerdo */}
@@ -253,7 +268,7 @@ export default function App() {
                       </div>
                     </div>
                   ) : (
-                    <form onSubmit={handleSubmit} className="space-y-6">
+                    <form onSubmit={handleSubmit} noValidate className="space-y-6">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                         {/* 1. Nome completo proprietário */}
                         <div>
@@ -296,11 +311,16 @@ export default function App() {
                             type="tel"
                             id="whatsapp"
                             required
+                            inputMode="tel"
+                            maxLength={15}
+                            aria-invalid={Boolean(phoneError)}
+                            aria-describedby={phoneError ? 'whatsapp-error' : undefined}
                             value={formData.whatsapp}
-                            onChange={(e) => setFormData({ ...formData, whatsapp: e.target.value })}
+                            onChange={(e) => { setPhoneError(''); setFormData({ ...formData, whatsapp: maskPhone(e.target.value) }); }}
                             placeholder="(00) 00000-0000"
                             className="w-full px-4 py-3.5 bg-white border border-[#cb9f69] text-[#181C2E] text-sm placeholder:text-[#181C2E]/40 focus:outline-none focus:border-[#181C2E] focus:ring-1 focus:ring-[#181C2E] transition-all shadow-[0_1px_2px_rgba(0,0,0,0.02)]"
                           />
+                          {phoneError && <p id="whatsapp-error" role="alert" className="mt-2 text-xs text-[#8C3A32]">{phoneError}</p>}
                         </div>
 
                         {/* 4. E-mail */}
@@ -370,12 +390,7 @@ export default function App() {
                             className="w-full px-4 py-3.5 bg-white border border-[#cb9f69] text-[#181C2E] text-sm focus:outline-none focus:border-[#181C2E] focus:ring-1 focus:ring-[#181C2E] transition-all cursor-pointer shadow-[0_1px_2px_rgba(0,0,0,0.02)]"
                           >
                             <option value="">Selecione o formato da sua loja</option>
-                            <option value="Loja física multimarcas">Loja física multimarcas</option>
-                            <option value="Loja em shopping">Loja em shopping</option>
-                            <option value="Boutique própria de rua">Boutique própria de rua</option>
-                            <option value="Loja somente online">Loja somente online</option>
-                            <option value="Revendedor autônomo">Revendedor autônomo</option>
-                            <option value="Outro">Outro</option>
+                            {storeTypes.map(type => <option key={type} value={type}>{type}</option>)}
                           </select>
                         </div>
 
@@ -405,6 +420,7 @@ export default function App() {
                           <input
                             type="text"
                             id="principaisMarcas"
+                            required
                             value={formData.principaisMarcas}
                             onChange={(e) => setFormData({ ...formData, principaisMarcas: e.target.value })}
                             placeholder="Ex: Farm, Animale, Osklen, marcas autorais locais..."
@@ -415,7 +431,7 @@ export default function App() {
 
                       {/* Ação de envio */}
                       <div className="pt-4 space-y-3">
-                        {phoneError && <p role="alert" className="text-xs text-[#8C3A32]">{phoneError}</p>}
+                        {fieldError && <p role="alert" className="text-sm text-[#8C3A32]">{fieldError}</p>}
                         {submitError && <p role="alert" className="text-sm text-[#8C3A32]">{submitError}</p>}
                         <button
                           type="submit"

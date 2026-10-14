@@ -3,14 +3,14 @@ import { protectRequest } from '../lib/api-boundary.js';
 import { digits, formatPhone, isValidCnpj, maskCnpj, storeTypes, validPhone, isTestLead } from '../lib/validation.js';
 import { lookupCnpj } from '../lib/cnpj-central.js';
 import { readTicket } from '../lib/cnpj-ticket.js';
+import { calculateLeadScore } from '../lib/lead-score.js';
 
 export function createLeadHandler({schedule = waitUntil, fetchImpl = fetch, lookup = lookupCnpj, environment = process.env, logger = console} = {}) {
   return function handler(req, res) {
     if (!protectRequest(req, res)) return;
     const form = req.body;
-    const fields = ['nomeProprietario','nomeLoja','whatsapp','email','cnpj','instagramLoja','tipoLoja','possuiLojaFisica'];
+    const fields = ['nomeProprietario','nomeLoja','whatsapp','email','cnpj','instagramLoja','tipoLoja','possuiLojaFisica','principaisMarcas'];
     if (fields.some(key => typeof form[key] !== 'string' || !form[key].trim() || form[key].length > 300)
-      || (form.principaisMarcas !== undefined && (typeof form.principaisMarcas !== 'string' || form.principaisMarcas.length > 1000))
       || !validPhone(form.whatsapp) || !isValidCnpj(form.cnpj) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())
       || !storeTypes.includes(form.tipoLoja) || !['Sim','Não'].includes(form.possuiLojaFisica)) {
       return res.status(400).json({ok:false, error:'Confira os campos obrigatórios, o WhatsApp e o CNPJ.'});
@@ -44,8 +44,12 @@ export function createLeadHandler({schedule = waitUntil, fetchImpl = fetch, look
           if (!result && form.cnpj_lookup_failed === true) result = {cnpj_validation_status:'checksum_valid', encontrado:false, company:null};
           try { result ||= await lookup(req, payload.cnpj_digits, {fetchImpl, environment, logger}); }
           catch { result = {cnpj_validation_status:'checksum_valid', encontrado:false, company:null}; }
+          const scoring = calculateLeadScore(form, result.company);
           const enriched = {...payload, cnpj_validation_status:result.cnpj_validation_status || 'checksum_valid',
-            encontrado:result.encontrado === true, fonte:result.fonte || '', company:result.company || null};
+            encontrado:result.encontrado === true, fonte:result.fonte || '', company:result.company || null,
+            cidade:result.company?.endereco?.cidade || '', estado:result.company?.endereco?.estado || '',
+            tempo_cnpj:result.company?.tempo_cnpj || '', ...scoring};
+          logger.info(JSON.stringify({event:'lead_score_calculated', submission_id:submissionId, ...scoring}));
           logger.info(JSON.stringify({event:'lead_enriched_payload', submission_id:submissionId, payload:enriched}));
           const response = await fetchImpl(destination.href, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(enriched), signal:AbortSignal.timeout(25000)});
           logger[response.ok ? 'info' : 'error'](JSON.stringify({event:response.ok ? 'lead_delivery_completed' : 'lead_delivery_failed', submission_id:submissionId, status:response.status}));

@@ -17,7 +17,7 @@ async function fillForm(page:Page) {
   await page.getByPlaceholder('contato@sualoja.com.br').fill('teste@example.invalid');
   await page.getByPlaceholder('00.000.000/0000-00').fill('60887522000189');
   await page.getByPlaceholder('@sualoja',{exact:true}).fill('@teste');
-  await page.locator('select').nth(0).selectOption('Outro');
+  await page.locator('select').nth(0).selectOption('Boutique');
   await page.locator('select').nth(1).selectOption('Sim');
   await page.getByPlaceholder('Ex: Farm, Animale, Osklen, marcas autorais locais...').fill('Marca fictícia');
 }
@@ -38,6 +38,7 @@ test('máscara, checksum imediato, incompleto no blur e CNPJ válido silencioso'
 
 test('CTA, lookup e validação não tiram o foco do campo escolhido',async({page})=>{
   await prepare(page);
+  await expect(page.locator('#tipoLoja option')).toHaveText(['Selecione o formato da sua loja','Boutique','Multimarcas','Loja de shopping','Loja online','Revendedor(a) autônomo(a)','Magazine']);
   await page.getByRole('button',{name:'Quero receber o catálogo',exact:true}).first().click({force:true});
   const name=page.getByPlaceholder('Seu nome completo');
   await name.click();await name.fill('Texto preservado');await page.waitForTimeout(1000);await expect(name).toBeFocused();
@@ -83,5 +84,17 @@ test('CNPJ inválido e telefone curto não chegam à API',async({page})=>{
   await page.getByRole('button',{name:'Quero receber o catálogo de atacado',exact:true}).click();expect(posts).toBe(0);
   await page.locator('#cnpj').fill('60887522000189');await page.locator('#whatsapp').fill('123');
   await page.getByRole('button',{name:'Quero receber o catálogo de atacado',exact:true}).click();
-  await expect(page.getByText('Informe o DDD e um telefone com 10 ou 11 números.')).toBeVisible();expect(posts).toBe(0);
+  await expect(page.getByText('Informe um DDD válido e 8 números, ou 9 números começando por 9.').first()).toBeVisible();expect(posts).toBe(0);
+});
+
+test('todos os campos exigidos mostram o erro e levam ao campo',async({page})=>{
+  await prepare(page);
+  await page.getByRole('button',{name:'Quero receber o catálogo de atacado',exact:true}).click();
+  await expect(page.locator('#nomeProprietario')).toBeFocused();
+  await expect(page.getByText('Nome completo proprietário: preenchimento obrigatório.')).toBeVisible();
+  await fillForm(page);
+  await page.locator('#principaisMarcas').fill('');
+  await page.getByRole('button',{name:'Quero receber o catálogo de atacado',exact:true}).click();
+  await expect(page.locator('#principaisMarcas')).toBeFocused();
+  await expect(page.getByText('Principais marcas vendidas na sua loja: preenchimento obrigatório.')).toBeVisible();
 });
