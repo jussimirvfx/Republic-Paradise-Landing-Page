@@ -1,6 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowRight, CheckCircle2, MessageCircle, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ArrowRight, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cnpjMessage, digits, isValidCnpj, maskCnpj, maskPhone, storeTypes, validPhone } from '../lib/validation.js';
+import { calculateLeadScore } from '../lib/lead-score.js';
+
+type CnpjLookup = {
+  cnpj:string;
+  ticket?:string;
+  failed?:boolean;
+  company?:{data_abertura?:string; endereco?:{estado?:string}} | null;
+  promise?:Promise<void>;
+};
 
 export default function App() {
   const [cnpjError, setCnpjError] = useState('');
@@ -9,7 +18,7 @@ export default function App() {
   const [fieldError, setFieldError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const sending = useRef(false);
-  const lookupCache = useRef<{cnpj:string; ticket?:string; failed?:boolean; pending?:boolean} | null>(null);
+  const lookupCache = useRef<CnpjLookup | null>(null);
   const [formData, setFormData] = useState({
     nomeProprietario: '',
     nomeLoja: '',
@@ -92,20 +101,21 @@ export default function App() {
     if (isValidCnpj(value)) void prefetchCnpj(value);
   };
 
-  const prefetchCnpj = async (value:string) => {
+  const prefetchCnpj = (value:string) => {
     const cnpj = digits(value);
     if (!isValidCnpj(cnpj) || lookupCache.current?.cnpj === cnpj) return;
-    const entry = {cnpj, pending:true, ticket:undefined as string | undefined, failed:false};
+    const entry:CnpjLookup = {cnpj, failed:false, company:null};
     lookupCache.current = entry;
-    try {
+    entry.promise = (async () => { try {
       const dryRun = new URLSearchParams(window.location.search).get('dry_run') === '1';
       const response = await fetch('/api/cnpj', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cnpj, dry_run:dryRun})});
       const result = await response.json();
       if (lookupCache.current !== entry) return;
       entry.ticket = response.ok && typeof result.ticket === 'string' ? result.ticket : undefined;
+      entry.company = response.ok && result.encontrado === true ? result.company || null : null;
       entry.failed = !response.ok || (!result.ticket && !dryRun);
     } catch { if (lookupCache.current === entry) entry.failed = true; }
-    finally { entry.pending = false; }
+    })();
   };
 
   const [submitted, setSubmitted] = useState(false);
@@ -125,9 +135,6 @@ export default function App() {
       resposta: 'A política de troca é restrita exclusivamente a defeitos de fabricação; não são aceitas devoluções ou trocas por encalhe de estoque.',
     },
   ];
-
-  const autoMessage = 'Olá! Tenho uma loja e gostaria de receber o catálogo de atacado da Republic Paradise.';
-  const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(autoMessage)}`;
 
   const scrollToForm = () => {
     const el = document.getElementById('cta-form');
@@ -171,6 +178,20 @@ export default function App() {
       const result = await response.json();
       if (!response.ok || result.ok !== true) throw new Error('API rejected lead');
       setSubmitted(true);
+      // Reutiliza a consulta em andamento sem atrasar a confirmação do cadastro.
+      void (async () => {
+        await cache?.promise;
+        const scoring = calculateLeadScore(formData, cache?.company);
+        console.group('Lead scoring — Republic Paradise');
+        console.log('Nota final:', scoring.lead_score, '/ 100');
+        console.table(scoring.score_breakdown);
+        console.log('Somatório:', scoring.score_breakdown.map(item => item.points).join(' + '), '=', scoring.lead_score);
+        console.log('Status:', scoring.qualification_status);
+        console.log('Motivos de desqualificação:', scoring.disqualification_reasons);
+        if (scoring.qualification_status === 'pendente_dados_cnpj') console.warn('Pontuação parcial: dados cadastrais do CNPJ indisponíveis.');
+        console.log('lead_score_calculated', scoring);
+        console.groupEnd();
+      })();
     } catch {
       setSubmitError('Não foi possível enviar seu cadastro. Seus dados foram mantidos; tente novamente.');
     } finally { sending.current = false; setIsSubmitting(false); }
@@ -255,17 +276,6 @@ export default function App() {
                       <p className="text-lg text-[#181C2E] font-semibold">
                         Nossa equipe comercial entrará em contato pelo WhatsApp.
                       </p>
-                      <div className="pt-4">
-                        <a
-                          href={whatsappUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-2 px-8 py-4 bg-[#181C2E] text-white text-xs uppercase tracking-widest font-semibold hover:bg-[#252b45] transition-colors"
-                        >
-                          <MessageCircle className="w-4 h-4" />
-                          <span>Abrir conversa no WhatsApp</span>
-                        </a>
-                      </div>
                     </div>
                   ) : (
                     <form onSubmit={handleSubmit} noValidate className="space-y-6">

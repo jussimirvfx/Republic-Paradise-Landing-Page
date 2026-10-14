@@ -98,3 +98,25 @@ test('todos os campos exigidos mostram o erro e levam ao campo',async({page})=>{
   await expect(page.locator('#principaisMarcas')).toBeFocused();
   await expect(page.getByText('Principais marcas vendidas na sua loja: preenchimento obrigatório.')).toBeVisible();
 });
+
+for (const profile of [
+  {type:'Boutique', physical:'Sim', company:{data_abertura:'2000-01-01',endereco:{estado:'SP'}}, score:100, status:'qualificado', reasons:0},
+  {type:'Loja online', physical:'Não', company:{data_abertura:'2000-01-01',endereco:{estado:'SP'}}, score:36, status:'desqualificado', reasons:2},
+  {type:'Boutique', physical:'Sim', company:null, score:74, status:'pendente_dados_cnpj', reasons:0},
+]) test(`console detalha score ${profile.status}`,async({page})=>{
+  const logs:any[]=[];
+  page.on('console',async message=>{
+    if (message.text().startsWith('lead_score_calculated')) logs.push(await message.args()[1].jsonValue());
+  });
+  await prepare(page,{ok:true,ticket:'signed-server-ticket',encontrado:Boolean(profile.company),company:profile.company});
+  await fillForm(page);
+  await page.locator('#tipoLoja').selectOption(profile.type);
+  await page.locator('#possuiLojaFisica').selectOption(profile.physical);
+  await page.route('**/api/leads',route=>route.fulfill({json:{ok:true}}));
+  await page.getByRole('button',{name:'Quero receber o catálogo de atacado',exact:true}).click();
+  await expect.poll(()=>logs.length).toBe(1);
+  expect(logs[0].lead_score).toBe(profile.score);
+  expect(logs[0].qualification_status).toBe(profile.status);
+  expect(logs[0].disqualification_reasons).toHaveLength(profile.reasons);
+  expect(logs[0].score_breakdown.reduce((sum:number,item:any)=>sum+item.points,0)).toBe(profile.score);
+});
