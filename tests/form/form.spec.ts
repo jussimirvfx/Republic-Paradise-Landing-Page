@@ -1,13 +1,14 @@
 import { test, expect, Page } from '@playwright/test';
 
-async function prepare(page:Page, lookup:any = {ok:true,ticket:'signed-server-ticket'}) {
+async function prepare(page:Page, lookup:any = {ok:true,ticket:'signed-server-ticket'}, path = '/') {
   await page.route('**/*', async route => {
     const url=new URL(route.request().url());
     if (url.hostname !== '127.0.0.1') return route.abort();
     if (url.pathname === '/api/cnpj') return route.fulfill({json:lookup});
+    if (url.pathname === '/api/meta/conversions') return route.fulfill({json:{success:true,dry_run:true,skipped_meta:true}});
     return route.continue();
   });
-  await page.goto('/');
+  await page.goto(path);
   await expect(page).toHaveTitle('Republic Paradise — B2B Moda Resort');
 }
 async function fillForm(page:Page) {
@@ -119,4 +120,55 @@ for (const profile of [
   expect(logs[0].qualification_status).toBe(profile.status);
   expect(logs[0].disqualification_reasons).toHaveLength(profile.reasons);
   expect(logs[0].score_breakdown.reduce((sum:number,item:any)=>sum+item.points,0)).toBe(profile.score);
+});
+
+for(const profile of [
+  {type:'Boutique',company:{data_abertura:'2000-01-01',endereco:{cidade:'Cidade',estado:'SP',cep:'01001000'}},qualified:true,score:100},
+  {type:'Loja online',company:{data_abertura:'2000-01-01',endereco:{estado:'SP'}},qualified:false,score:65},
+  {type:'Boutique',company:null,qualified:false,score:74},
+]) test(`Meta envia os eventos corretos para ${profile.type} com score ${profile.score}`,async({page})=>{
+  const events:any[]=[];const errors:string[]=[];
+  page.on('pageerror',error=>errors.push(error.message));
+  await prepare(page,{ok:true,ticket:'signed-server-ticket',encontrado:Boolean(profile.company),company:profile.company});
+  await page.route('**/api/meta/conversions',route=>{
+    events.push(route.request().postDataJSON());return route.fulfill({json:{success:true}});
+  });
+  await expect.poll(()=>events.filter(event=>event.event_name==='PageView').length).toBe(1);
+  await fillForm(page);await page.locator('#tipoLoja').selectOption(profile.type);
+  let release:any;const pending=new Promise<void>(resolve=>{release=resolve;});
+  await page.route('**/api/leads',async route=>{await pending;await route.fulfill({json:{ok:true}});});
+  await page.getByRole('button',{name:'Quero receber o catálogo de atacado',exact:true}).click();
+  expect(events.some(event=>event.event_name==='Lead')).toBe(false);
+  release();
+  await expect.poll(()=>events.filter(event=>event.event_name==='Lead').length).toBe(1);
+  await page.waitForTimeout(200);
+  expect(events.filter(event=>event.event_name==='LeadQualificado')).toHaveLength(profile.qualified?1:0);
+  const lead=events.find(event=>event.event_name==='Lead');
+  expect(lead.custom_data.value).toBe(profile.score);expect(lead.custom_data.lead_score).toBe(profile.score);
+  expect(lead.user_data.em[0]).toMatch(/^[a-f\d]{64}$/);
+  expect(lead.user_data.ph[0]).toMatch(/^[a-f\d]{64}$/);
+  const pixelEvents=await page.evaluate(()=>((window as any).fbq.queue as any[]).filter(args=>args[0]==='track' && args[1]==='Lead'));
+  expect(pixelEvents[0][3].eventID).toBe(lead.event_id);
+  expect(errors).toEqual([]);
+});
+
+test('dry-run do navegador não inicializa Pixel nem envia eventos Meta',async({page})=>{
+  let events=0;
+  await prepare(page,{ok:true,dry_run:true},'/?dry_run=1');
+  await page.route('**/api/meta/conversions',route=>{events++;return route.fulfill({json:{success:true}});});
+  await fillForm(page);
+  await page.route('**/api/leads',route=>route.fulfill({json:{ok:true,dry_run:true}}));
+  await page.getByRole('button',{name:'Quero receber o catálogo de atacado',exact:true}).click();
+  await expect(page.getByText('Nossa equipe comercial entrará em contato pelo WhatsApp.',{exact:true})).toBeVisible();
+  await page.waitForTimeout(900);
+  expect(events).toBe(0);expect(await page.evaluate(()=>Boolean((window as any).fbq))).toBe(false);
+});
+
+test('rota CAPI local responde dry-run sem envio externo',async({page,request})=>{
+  const response=await request.post('/api/meta/conversions',{
+    headers:{Origin:'http://127.0.0.1:43173','X-VFX-Dry-Run':'1'},
+    data:{event_name:'Lead',event_id:'local-smoke',event_time:Math.floor(Date.now()/1000),
+      event_source_url:'http://127.0.0.1:43173/',user_data:{em:['a'.repeat(64)]},custom_data:{lead_score:100,value:100}},
+  });
+  expect(response.status()).toBe(200);expect(await response.json()).toMatchObject({dry_run:true,skipped_meta:true});
 });

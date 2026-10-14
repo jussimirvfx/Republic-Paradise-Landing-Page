@@ -1,6 +1,7 @@
 {
   "functions": {
     "api/leads.js": {"maxDuration": 90},
-    "api/cnpj.js": {"maxDuration": 45}
+    "api/cnpj.js": {"maxDuration": 45},
+    "api/meta/conversions.js": {"maxDuration": 15}
   }
 }

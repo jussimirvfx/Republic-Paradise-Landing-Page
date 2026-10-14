@@ -2,16 +2,18 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ArrowRight, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cnpjMessage, digits, isValidCnpj, maskCnpj, maskPhone, storeTypes, validPhone } from '../lib/validation.js';
 import { calculateLeadScore } from '../lib/lead-score.js';
+import { isTrackingDryRun, updateAdvancedMatching, useLeadTracking } from './metaTracking';
 
 type CnpjLookup = {
   cnpj:string;
   ticket?:string;
   failed?:boolean;
-  company?:{data_abertura?:string; endereco?:{estado?:string}} | null;
+  company?:{data_abertura?:string; endereco?:{estado?:string; cidade?:string; cep?:string}} | null;
   promise?:Promise<void>;
 };
 
 export default function App() {
+  const tracking = useLeadTracking();
   const [cnpjError, setCnpjError] = useState('');
   const [phoneError, setPhoneError] = useState('');
   const [submitError, setSubmitError] = useState('');
@@ -191,7 +193,23 @@ export default function App() {
         if (scoring.qualification_status === 'pendente_dados_cnpj') console.warn('Pontuação parcial: dados cadastrais do CNPJ indisponíveis.');
         console.log('lead_score_calculated', scoring);
         console.groupEnd();
-      })();
+        if (isTrackingDryRun() || !tracking) {
+          console.info('[META PIXEL] Dry-run: envio à Meta desativado.');
+          return;
+        }
+        const leadData = {
+          name:formData.nomeProprietario.trim(), email:formData.email.trim(), phone:`+55${digits(formData.whatsapp)}`,
+          city:cache?.company?.endereco?.cidade || '', state:cache?.company?.endereco?.estado || '',
+          zip:cache?.company?.endereco?.cep || '', country:'BR',
+          value:scoring.lead_score, lead_score:scoring.lead_score, currency:'BRL',
+          content_name:'Cadastro de Lojista Republic Paradise', content_category:'Lead Generation',
+        };
+        updateAdvancedMatching(leadData);
+        await Promise.allSettled([
+          tracking.trackLead(leadData),
+          ...(scoring.qualified && scoring.lead_score >= 50 ? [tracking.trackLeadQualificado(leadData)] : []),
+        ]);
+      })().catch(error => console.warn('[META PIXEL] Falha no tracking após o cadastro:', error));
     } catch {
       setSubmitError('Não foi possível enviar seu cadastro. Seus dados foram mantidos; tente novamente.');
     } finally { sending.current = false; setIsSubmitting(false); }

@@ -5,6 +5,7 @@ import { lookupCnpj, normalizeCompany } from '../lib/cnpj-central.js';
 import { issueTicket, readTicket } from '../lib/cnpj-ticket.js';
 import { createLeadHandler } from '../api/leads.js';
 import { calculateLeadScore } from '../lib/lead-score.js';
+import { createConversionHandler } from '../api/meta/conversions.js';
 
 const form = {nomeProprietario:'TESTE Republic',nomeLoja:'Teste Mais Lojistas - Republic',whatsapp:'(11) 99999-0000',email:'teste@example.invalid',cnpj:'60.887.522/0001-89',instagramLoja:'@teste',tipoLoja:'Boutique',possuiLojaFisica:'Sim',principaisMarcas:'Marca fictícia'};
 let ip = 0;
@@ -15,6 +16,53 @@ const environment = {N8N_REPUBLIC_PARADISE_WEBHOOK_URL:'https://n8n.agenciavfx.c
 const company = {razao_social:'Empresa fictícia',situacao_cadastral:'Ativo',data_abertura:'2000-01-01',tempo_cnpj:'26 anos',porte:'Pequeno',cnae_principal:'1234567',descricao_cnae_principal:'Atividade fictícia',endereco:{rua:'Rua fictícia',numero:'10',bairro:'Teste',cidade:'Cidade',estado:'SP',completo:'Endereço fictício'}};
 const result = {cnpj:'60887522000189',cnpj_valido:true,encontrado:true,fonte:'mock',company,cnpj_validation_status:'cadastral_valid'};
 const recorder = () => {const logs=[];return {logs,info:v=>logs.push(JSON.parse(v)),warn:v=>logs.push(JSON.parse(v)),error:v=>logs.push(JSON.parse(v))};};
+
+const conversion = {event_name:'Lead', event_id:'mock-event-id', event_time:1791970000,
+  event_source_url:'https://lp.test/', user_data:{em:['a'.repeat(64)],ph:['b'.repeat(64)],fn:['c'.repeat(64)]},
+  custom_data:{value:25,lead_score:100,currency:'BRL'}};
+const metaEnvironment = {META_PIXEL_ID:'29980293874892643',META_API_ACCESS_TOKEN:'mock-secret-token',META_TEST_EVENT_CODE:'TEST52417'};
+
+test('CAPI: dry-run por todos os marcadores registra backup e não chama Meta', async () => {
+  for (const flag of ['header','dry_run','dryRun','vfx_dry_run','skip_webhook']) {
+    let calls=0;const logger=recorder();const res=response();
+    const req=request({...conversion,...(flag==='header'?{}:{[flag]:true})});
+    if(flag==='header') req.headers['x-vfx-dry-run']='true';
+    await createConversionHandler({environment:metaEnvironment,logger,fetchImpl:async()=>{calls++;}})(req,res);
+    assert.equal(res.statusCode,200);assert.equal(res.body.skipped_meta,true);assert.equal(calls,0);
+    assert.equal(logger.logs[0].event,'conversion_api_event_backup');
+  }
+});
+
+test('CAPI: backup antecede Meta, preserva hashes e IDs, não envia código de teste em produção', async () => {
+  const logger=recorder();let captured;const res=response();const req=request(conversion);
+  req.headers['x-forwarded-for']='192.0.2.1';req.headers['user-agent']='mock-browser';
+  await createConversionHandler({environment:{...metaEnvironment,VERCEL_ENV:'production'},logger,fetchImpl:async(url,options)=>{
+    assert.equal(logger.logs[0].event,'conversion_api_event_backup');
+    assert.equal(url.includes('mock-secret-token'),false);
+    captured=JSON.parse(options.body);return {ok:true,json:async()=>({events_received:1})};
+  }})(req,res);
+  assert.equal(res.statusCode,200);assert.equal(captured.data[0].event_id,conversion.event_id);
+  assert.deepEqual(captured.data[0].user_data.em,conversion.user_data.em);
+  assert.equal(captured.data[0].user_data.client_ip_address,'192.0.2.1');
+  assert.equal(captured.data[0].custom_data.value,100);
+  assert.equal(captured.test_event_code,undefined);
+  assert.equal(JSON.stringify(logger.logs).includes('mock-secret-token'),false);
+});
+
+test('CAPI: falhas de configuração, Meta e rede retornam 202 com payload recuperável sem token', async () => {
+  for(const kind of ['configuration','meta','network']) {
+    const logger=recorder();const res=response();
+    await createConversionHandler({environment:kind==='configuration'?{}:metaEnvironment,logger,fetchImpl:async()=>{
+      if(kind==='network') throw new Error('mock-secret-token');
+      return {ok:false,status:400,json:async()=>({error:{message:'mock-secret-token'}})};
+    }})(request({...conversion,access_token:'mock-secret-token'}),res);
+    assert.equal(res.statusCode,202);assert.equal(res.body.accepted,true);
+    const error=logger.logs.at(-1);
+    assert.equal(error.event,'conversion_api_event_error');
+    assert.ok(error.request_payload);assert.ok(error.prepared_meta_payload);
+    assert.equal(JSON.stringify(logger.logs).includes('mock-secret-token'),false);
+  }
+});
 
 test('score usa somente qualificação e cadastro consultado, com razões explícitas', () => {
   const qualified=calculateLeadScore({...form,tipoLoja:'Boutique'},company,new Date('2026-10-14'));
@@ -32,6 +80,11 @@ test('score usa somente qualificação e cadastro consultado, com razões explí
   assert.equal(magazine.qualification_status,'desqualificado');
   const pending=calculateLeadScore(form,null);
   assert.equal(pending.qualification_status,'pendente_dados_cnpj');
+  for(const data_abertura of ['2025-99-99','2099-01-01','2025-02-31']) {
+    const invalidDate=calculateLeadScore(form,{...company,data_abertura});
+    assert.equal(invalidDate.qualified,false);
+    assert.equal(invalidDate.qualification_status,'pendente_dados_cnpj');
+  }
 });
 
 test('checksum, máscara e mensagens silenciosas para CNPJ válido', () => {
