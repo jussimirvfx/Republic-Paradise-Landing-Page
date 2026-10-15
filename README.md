@@ -20,6 +20,10 @@ Secrets server-side em Production e Preview: `N8N_REPUBLIC_PARADISE_WEBHOOK_URL`
 
 Backup consiste somente nos logs correlacionados por submission_id. Não há banco, fila ou planilha adicional de backup. A aba de testes é um destino isolado para verificação. O envio em segundo plano não oferece retry automático.
 
+## Tipo de loja
+
+O formulário e a API aceitam, nesta ordem: Boutique, Multimarcas, Loja de shopping, Loja física e online e Loja online. A opção Loja física e online recebe 40 pontos e não desqualifica pelo tipo, conforme decisão de Juliean em 15/10/2026. As demais condições de qualificação permanecem aplicáveis. Loja de bairro/tradicional, Revendedor(a) autônomo(a) e Magazine não são opções válidas para novos cadastros.
+
 ## Meta Pixel e Conversion API
 
 `scoretrack@1.0.0` vem do registry público npmjs. A configuração manual fica em `src/metaTracking.tsx`. O provider envia um PageView por carregamento e o hook do pacote acompanha Scroll 25/50/75/100. Não montamos `MetaPixel`, pois ele enviaria outro PageView além do provider.

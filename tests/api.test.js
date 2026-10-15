@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cnpjMessage, isValidCnpj, maskCnpj } from '../lib/validation.js';
+import { cnpjMessage, isValidCnpj, maskCnpj, storeTypes } from '../lib/validation.js';
 import { lookupCnpj, normalizeCompany } from '../lib/cnpj-central.js';
 import { issueTicket, readTicket } from '../lib/cnpj-ticket.js';
 import { createLeadHandler } from '../api/leads.js';
@@ -70,6 +70,12 @@ test('score usa somente qualificação e cadastro consultado, com razões explí
   assert.equal(qualified.value,100);
   assert.equal(qualified.qualification_status,'qualificado');
   assert.deepEqual(qualified.score_breakdown.map(item=>item.points),[40,34,1,25]);
+  const hybrid=calculateLeadScore({...form,tipoLoja:'Loja física e online'},company,new Date('2026-10-14'));
+  assert.equal(hybrid.score_breakdown[0].points,40);
+  assert.equal(hybrid.lead_score,100);
+  assert.equal(hybrid.qualified,true);
+  const hybridWithoutPhysical=calculateLeadScore({...form,tipoLoja:'Loja física e online',possuiLojaFisica:'Não'},company,new Date('2026-10-14'));
+  assert.deepEqual(hybridWithoutPhysical.disqualification_reasons,['Não possui loja física']);
   const disqualified=calculateLeadScore({...form,tipoLoja:'Loja online',possuiLojaFisica:'Não'},
     {...company,data_abertura:'14/11/2025'},new Date('2026-10-14'));
   assert.equal(disqualified.lead_score,21);
@@ -160,6 +166,29 @@ test('sem cache, consulta pendente não bloqueia aceite; falha permite entrega c
   assert.equal(captured,undefined);
   resolveLookup({cnpj_validation_status:'checksum_valid',encontrado:false,company:null});await Promise.all(tasks);
   assert.equal(captured.cnpj_validation_status,'checksum_valid');
+});
+
+test('cada opção de loja chega ao destino com score; opções antigas são recusadas', async () => {
+  for (const tipoLoja of storeTypes) {
+    const tasks=[];let captured;const logger=recorder();const res=response();
+    createLeadHandler({environment,logger,schedule:p=>tasks.push(p),lookup:async()=>result,
+      fetchImpl:async(_,opts)=>{captured=JSON.parse(opts.body);return {ok:true,status:200};}
+    })(request({...form,tipoLoja}),res);
+    assert.equal(res.statusCode,200,tipoLoja);
+    await Promise.all(tasks);
+    assert.ok(captured,`Entrega de ${tipoLoja}`);
+    assert.equal(captured.tipo_loja,tipoLoja);
+    assert.ok(Number.isFinite(captured.lead_score));
+    assert.equal(logger.logs.at(-1).event,'lead_delivery_completed');
+  }
+  for (const tipoLoja of ['Loja de bairro/tradicional','Revendedor(a) autônomo(a)','Magazine']) {
+    let calls=0;const res=response();
+    createLeadHandler({environment,logger:recorder(),schedule:()=>calls++,lookup:async()=>{calls++;return result;},
+      fetchImpl:async()=>{calls++;return {ok:true,status:200};}
+    })(request({...form,tipoLoja}),res);
+    assert.equal(res.statusCode,400,tipoLoja);
+    assert.equal(calls,0);
+  }
 });
 
 test('lookup automático falho não repete consulta no envio', async () => {

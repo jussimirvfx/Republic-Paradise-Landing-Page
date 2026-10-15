@@ -39,7 +39,7 @@ test('máscara, checksum imediato, incompleto no blur e CNPJ válido silencioso'
 
 test('CTA, lookup e validação não tiram o foco do campo escolhido',async({page})=>{
   await prepare(page);
-  await expect(page.locator('#tipoLoja option')).toHaveText(['Selecione o formato da sua loja','Boutique','Multimarcas','Loja de shopping','Loja online','Revendedor(a) autônomo(a)','Magazine']);
+  await expect(page.locator('#tipoLoja option')).toHaveText(['Selecione o formato da sua loja','Boutique','Multimarcas','Loja de shopping','Loja física e online','Loja online']);
   await page.getByRole('button',{name:'Quero receber o catálogo',exact:true}).first().click({force:true});
   const name=page.getByPlaceholder('Seu nome completo');
   await name.click();await name.fill('Texto preservado');await page.waitForTimeout(1000);await expect(name).toBeFocused();
@@ -124,6 +124,7 @@ for (const profile of [
 
 for(const profile of [
   {type:'Boutique',company:{data_abertura:'2000-01-01',endereco:{cidade:'Cidade',estado:'SP',cep:'01001000'}},qualified:true,score:100},
+  {type:'Loja física e online',company:{data_abertura:'2000-01-01',endereco:{estado:'SP'}},qualified:true,score:100},
   {type:'Loja online',company:{data_abertura:'2000-01-01',endereco:{estado:'SP'}},qualified:false,score:65},
   {type:'Boutique',company:null,qualified:false,score:74},
 ]) test(`Meta envia os eventos corretos para ${profile.type} com score ${profile.score}`,async({page})=>{
