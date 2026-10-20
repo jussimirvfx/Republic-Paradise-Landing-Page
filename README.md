@@ -58,4 +58,6 @@ Na CAPI, header X-VFX-Dry-Run:1 e aliases dry_run/dryRun/vfx_dry_run/skip_webhoo
 
 As imagens originais permanecem em public. Hero usa WebP desktop e uma extração mobile que preserva object-position:30%; galeria usa WebP e lazy loading. Montserrat variável é servida localmente, com font-display:swap e licença OFL em public/fonts. Não há variação de conteúdo por PageSpeed/user-agent.
 
+A primeira seção é pré-renderizada no build a partir de src/Hero.tsx. O navegador recebe o título, imagem e CTA no HTML e ativa o clique do CTA; o formulário continua usando seu fluxo atual. Fundos abaixo da dobra carregam sob demanda. O HTML é igual para todos os visitantes, sem detecção de auditor.
+
 Após cada publicação, confirmar SHA/deployment/aliases, rotas, assets, Pixel PageView e PageSpeed no domínio final. A entrega real a n8n, Sheets, Evolution, Meta e Axiom só é declarada com recibos próprios e teste autorizado/isolado; build READY e mocks não comprovam esses destinos.
