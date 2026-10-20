@@ -6,30 +6,34 @@ import { issueTicket, readTicket } from '../lib/cnpj-ticket.js';
 import { createLeadHandler } from '../api/leads.js';
 import { calculateLeadScore } from '../lib/lead-score.js';
 import { createConversionHandler } from '../api/meta/conversions.js';
+import { issueLeadReceipt } from '../lib/lead-receipt.js';
 
 const form = {nomeProprietario:'TESTE Republic',nomeLoja:'Teste Mais Lojistas - Republic',whatsapp:'(11) 99999-0000',email:'teste@example.invalid',cnpj:'60.887.522/0001-89',instagramLoja:'@teste',tipoLoja:'Boutique',possuiLojaFisica:'Sim',principaisMarcas:'Marca fictícia'};
 let ip = 0;
 const request = body => ({method:'POST',headers:{host:'lp.test',origin:'https://lp.test','content-type':'application/json','x-forwarded-for':String(++ip),'x-vercel-oidc-token':'runtime-token'},body});
 const response = () => ({statusCode:0,body:null,setHeader(){},status(n){this.statusCode=n;return this;},json(value){this.body=value;return this;}});
 const secret = 'a'.repeat(64);
-const environment = {N8N_REPUBLIC_PARADISE_WEBHOOK_URL:'https://n8n.agenciavfx.com.br/webhook/mock',CNPJ_PREFETCH_SIGNING_SECRET:secret};
+const environment = {N8N_REPUBLIC_PARADISE_WEBHOOK_URL:'https://n8n.agenciavfx.com.br/webhook/mock',CNPJ_PREFETCH_SIGNING_SECRET:secret,LP_DRY_RUN_ENABLED:'1'};
 const company = {razao_social:'Empresa fictícia',situacao_cadastral:'Ativo',data_abertura:'2000-01-01',tempo_cnpj:'26 anos',porte:'Pequeno',cnae_principal:'1234567',descricao_cnae_principal:'Atividade fictícia',endereco:{rua:'Rua fictícia',numero:'10',bairro:'Teste',cidade:'Cidade',estado:'SP',completo:'Endereço fictício'}};
 const result = {cnpj:'60887522000189',cnpj_valido:true,encontrado:true,fonte:'mock',company,cnpj_validation_status:'cadastral_valid'};
 const recorder = () => {const logs=[];return {logs,info:v=>logs.push(JSON.parse(v)),warn:v=>logs.push(JSON.parse(v)),error:v=>logs.push(JSON.parse(v))};};
 
-const conversion = {event_name:'Lead', event_id:'mock-event-id', event_time:1791970000,
+const submissionId = '00000000-0000-4000-8000-000000000001';
+const conversion = {event_name:'Lead', event_id:`${submissionId}:Lead`, event_time:1791970000,
+  submission_id:submissionId,tracking_receipt:issueLeadReceipt({submission_id:submissionId,is_test:false},secret),
   event_source_url:'https://lp.test/', user_data:{em:['a'.repeat(64)],ph:['b'.repeat(64)],fn:['c'.repeat(64)]},
   custom_data:{value:25,lead_score:100,currency:'BRL'}};
-const metaEnvironment = {META_PIXEL_ID:'29980293874892643',META_API_ACCESS_TOKEN:'mock-secret-token',META_TEST_EVENT_CODE:'TEST52417'};
+const metaEnvironment = {META_PIXEL_ID:'29980293874892643',META_API_ACCESS_TOKEN:'mock-secret-token',META_TEST_EVENT_CODE:'TEST52417',CNPJ_PREFETCH_SIGNING_SECRET:secret,LP_DRY_RUN_ENABLED:'1'};
 
-test('CAPI: dry-run por todos os marcadores registra backup e não chama Meta', async () => {
+test('CAPI: dry-run por todos os marcadores registra somente metadados e não chama Meta', async () => {
   for (const flag of ['header','dry_run','dryRun','vfx_dry_run','skip_webhook']) {
     let calls=0;const logger=recorder();const res=response();
     const req=request({...conversion,...(flag==='header'?{}:{[flag]:true})});
     if(flag==='header') req.headers['x-vfx-dry-run']='true';
     await createConversionHandler({environment:metaEnvironment,logger,fetchImpl:async()=>{calls++;}})(req,res);
     assert.equal(res.statusCode,200);assert.equal(res.body.skipped_meta,true);assert.equal(calls,0);
-    assert.equal(logger.logs[0].event,'conversion_api_event_backup');
+    assert.equal(logger.logs[0].event,'conversion_api_dry_run');
+    assert.equal(logger.logs[0].prepared_meta_payload,undefined);
   }
 });
 
@@ -52,7 +56,7 @@ test('CAPI: backup antecede Meta, preserva hashes e IDs, não envia código de t
 test('CAPI: falhas de configuração, Meta e rede retornam 202 com payload recuperável sem token', async () => {
   for(const kind of ['configuration','meta','network']) {
     const logger=recorder();const res=response();
-    await createConversionHandler({environment:kind==='configuration'?{}:metaEnvironment,logger,fetchImpl:async()=>{
+    await createConversionHandler({environment:kind==='configuration'?{CNPJ_PREFETCH_SIGNING_SECRET:secret}:metaEnvironment,logger,fetchImpl:async()=>{
       if(kind==='network') throw new Error('mock-secret-token');
       return {ok:false,status:400,json:async()=>({error:{message:'mock-secret-token'}})};
     }})(request({...conversion,access_token:'mock-secret-token'}),res);
@@ -198,9 +202,9 @@ test('lookup automático falho não repete consulta no envio', async () => {
   assert.equal(res.statusCode,200);assert.equal(calls,0);
 });
 
-for(const kind of ['http','network']) test(`falha posterior ${kind} não muda confirmação e deixa evidência`,async()=>{
+for(const kind of ['http','network','timeout']) test(`falha posterior ${kind} não muda confirmação e deixa evidência`,async()=>{
   const tasks=[];const logger=recorder();const res=response();
-  createLeadHandler({environment,logger,schedule:p=>tasks.push(p),lookup:async()=>result,fetchImpl:async()=>{if(kind==='network') throw new TypeError('offline');return {ok:false,status:500};}})(request(form),res);
+  createLeadHandler({environment,logger,schedule:p=>tasks.push(p),lookup:async()=>result,fetchImpl:async()=>{if(kind==='network') throw new TypeError('offline');if(kind==='timeout')throw new DOMException('timeout','TimeoutError');return {ok:false,status:500};}})(request(form),res);
   assert.equal(res.statusCode,200);await Promise.all(tasks);
   assert.equal(logger.logs.at(-1).event,'lead_delivery_failed');assert.equal(res.statusCode,200);
 });

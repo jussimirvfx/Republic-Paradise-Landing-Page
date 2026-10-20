@@ -1,32 +1,10 @@
-import { test, expect, Page } from '@playwright/test';
-
-async function prepare(page:Page, lookup:any = {ok:true,ticket:'signed-server-ticket'}, path = '/') {
-  await page.route('**/*', async route => {
-    const url=new URL(route.request().url());
-    if (url.hostname !== '127.0.0.1') return route.abort();
-    if (url.pathname === '/api/cnpj') return route.fulfill({json:lookup});
-    if (url.pathname === '/api/meta/conversions') return route.fulfill({json:{success:true,dry_run:true,skipped_meta:true}});
-    return route.continue();
-  });
-  await page.goto(path);
-  await expect(page).toHaveTitle('Republic Paradise — B2B Moda Resort');
-}
-async function fillForm(page:Page) {
-  await page.getByPlaceholder('Seu nome completo').fill('TESTE Republic');
-  await page.getByPlaceholder('Ex: Boutique Paradise').fill('Teste Mais Lojistas - Republic');
-  await page.getByPlaceholder('(00) 00000-0000').fill('(11) 90000-0000');
-  await page.getByPlaceholder('contato@sualoja.com.br').fill('teste@example.invalid');
-  await page.getByPlaceholder('00.000.000/0000-00').fill('60887522000189');
-  await page.getByPlaceholder('@sualoja',{exact:true}).fill('@teste');
-  await page.locator('select').nth(0).selectOption('Boutique');
-  await page.locator('select').nth(1).selectOption('Sim');
-  await page.getByPlaceholder('Ex: Farm, Animale, Osklen, marcas autorais locais...').fill('Marca fictícia');
-}
+import { test, expect } from '@playwright/test';
+import { prepare,fillForm,accepted,dryReceipt,acceptRoute } from './helpers';
 
 test('máscara, checksum imediato, incompleto no blur e CNPJ válido silencioso',async({page})=>{
   let posts=0;
   await prepare(page);
-  await page.route('**/api/leads',route=>{posts++;return route.fulfill({json:{ok:true}});});
+  await page.route('**/api/leads',route=>{posts++;return acceptRoute(route);});
   const input=page.getByPlaceholder('00.000.000/0000-00');
   await input.fill('60887522000188');await expect(page.getByText('CNPJ inválido. Confira os números informados.')).toBeVisible();
   await input.fill('00000000000000');await expect(input).toHaveAttribute('aria-invalid','true');
@@ -56,7 +34,7 @@ test('confirmação somente após aceite da API, com todos os campos e ticket',a
   await prepare(page);await fillForm(page);
   let release:any;let captured:any;
   const pending=new Promise<void>(resolve=>{release=resolve;});
-  await page.route('**/api/leads',async route=>{captured=route.request().postDataJSON();await pending;await route.fulfill({json:{ok:true,accepted:true}});});
+  await page.route('**/api/leads',async route=>{captured=route.request().postDataJSON();await pending;await acceptRoute(route);});
   await page.getByRole('button',{name:'Quero receber o catálogo de atacado',exact:true}).click();
   await expect(page.getByText('Enviando cadastro...')).toBeVisible();
   await expect(page.getByText('Nossa equipe comercial entrará em contato pelo WhatsApp.',{exact:true})).toHaveCount(0);
@@ -68,7 +46,7 @@ test('confirmação somente após aceite da API, com todos os campos e ticket',a
 test('falhas da consulta são silenciosas; falha de envio preserva respostas para retry',async({page})=>{
   await prepare(page,{ok:true,encontrado:false,ticket:'signed-unavailable-ticket'});await fillForm(page);
   let count=0;
-  await page.route('**/api/leads',route=>route.fulfill({status:++count===1?503:200,json:{ok:count>1}}));
+  await page.route('**/api/leads',route=>++count===1?route.fulfill({status:503,json:{ok:false}}):acceptRoute(route));
   await expect(page.locator('#cnpj-error')).toHaveCount(0);
   await page.getByRole('button',{name:'Quero receber o catálogo de atacado',exact:true}).click();
   await expect(page.getByText('Não foi possível enviar seu cadastro. Seus dados foram mantidos; tente novamente.')).toBeVisible();
@@ -80,7 +58,7 @@ test('falhas da consulta são silenciosas; falha de envio preserva respostas par
 
 test('CNPJ inválido e telefone curto não chegam à API',async({page})=>{
   await prepare(page);await fillForm(page);let posts=0;
-  await page.route('**/api/leads',route=>{posts++;return route.fulfill({json:{ok:true}});});
+  await page.route('**/api/leads',route=>{posts++;return acceptRoute(route);});
   await page.locator('#cnpj').fill('60887522000188');
   await page.getByRole('button',{name:'Quero receber o catálogo de atacado',exact:true}).click();expect(posts).toBe(0);
   await page.locator('#cnpj').fill('60887522000189');await page.locator('#whatsapp').fill('123');
@@ -113,7 +91,7 @@ for (const profile of [
   await fillForm(page);
   await page.locator('#tipoLoja').selectOption(profile.type);
   await page.locator('#possuiLojaFisica').selectOption(profile.physical);
-  await page.route('**/api/leads',route=>route.fulfill({json:{ok:true}}));
+  await page.route('**/api/leads',acceptRoute);
   await page.getByRole('button',{name:'Quero receber o catálogo de atacado',exact:true}).click();
   await expect.poll(()=>logs.length).toBe(1);
   expect(logs[0].lead_score).toBe(profile.score);
@@ -130,14 +108,11 @@ for(const profile of [
 ]) test(`Meta envia os eventos corretos para ${profile.type} com score ${profile.score}`,async({page})=>{
   const events:any[]=[];const errors:string[]=[];
   page.on('pageerror',error=>errors.push(error.message));
-  await prepare(page,{ok:true,ticket:'signed-server-ticket',encontrado:Boolean(profile.company),company:profile.company});
-  await page.route('**/api/meta/conversions',route=>{
-    events.push(route.request().postDataJSON());return route.fulfill({json:{success:true}});
-  });
+  await prepare(page,{ok:true,ticket:'signed-server-ticket',encontrado:Boolean(profile.company),company:profile.company},'/',events);
   await expect.poll(()=>events.filter(event=>event.event_name==='PageView').length).toBe(1);
-  await fillForm(page);await page.locator('#tipoLoja').selectOption(profile.type);
+  await fillForm(page,'Loja fictícia da auditoria');await page.locator('#tipoLoja').selectOption(profile.type);
   let release:any;const pending=new Promise<void>(resolve=>{release=resolve;});
-  await page.route('**/api/leads',async route=>{await pending;await route.fulfill({json:{ok:true}});});
+  await page.route('**/api/leads',async route=>{await pending;await acceptRoute(route);});
   await page.getByRole('button',{name:'Quero receber o catálogo de atacado',exact:true}).click();
   expect(events.some(event=>event.event_name==='Lead')).toBe(false);
   release();
@@ -153,16 +128,17 @@ for(const profile of [
   expect(errors).toEqual([]);
 });
 
-test('dry-run do navegador não inicializa Pixel nem envia eventos Meta',async({page})=>{
+test('dry-run sinaliza o teste, mantém Pixel de navegação e bloqueia CAPI/conversões',async({page})=>{
   let events=0;
   await prepare(page,{ok:true,dry_run:true},'/?dry_run=1');
+  await expect(page.getByText('Modo de teste: cadastro e CNPJ bloqueados. Pixel normal ativo. Use dados fictícios.')).toBeVisible();
   await page.route('**/api/meta/conversions',route=>{events++;return route.fulfill({json:{success:true}});});
   await fillForm(page);
-  await page.route('**/api/leads',route=>route.fulfill({json:{ok:true,dry_run:true}}));
+  await page.route('**/api/leads',route=>route.fulfill({json:dryReceipt}));
   await page.getByRole('button',{name:'Quero receber o catálogo de atacado',exact:true}).click();
-  await expect(page.getByText('Nossa equipe comercial entrará em contato pelo WhatsApp.',{exact:true})).toBeVisible();
+  await expect(page.getByText('Teste concluído. Nenhum cadastro foi enviado.',{exact:true})).toBeVisible();
   await page.waitForTimeout(900);
-  expect(events).toBe(0);expect(await page.evaluate(()=>Boolean((window as any).fbq))).toBe(false);
+  expect(events).toBe(0);expect(await page.evaluate(()=>Boolean((window as any).fbq))).toBe(true);
 });
 
 test('rota CAPI local responde dry-run sem envio externo',async({page,request})=>{

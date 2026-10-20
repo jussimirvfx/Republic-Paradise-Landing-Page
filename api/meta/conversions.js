@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { protectRequest } from '../../lib/api-boundary.js';
+import { isTestLead } from '../../lib/validation.js';
+import { readLeadReceipt } from '../../lib/lead-receipt.js';
+import { checkDryRun } from '../../lib/dry-run.js';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
-const enabled = value => value === true || value === 1 || value === '1' || value === 'true';
 const hashFields = ['em','ph','fn','ln','ct','st','zp','country','external_id'];
 
 export function createConversionHandler({fetchImpl = fetch, environment = process.env, logger = console} = {}) {
@@ -13,12 +15,14 @@ export function createConversionHandler({fetchImpl = fetch, environment = proces
       ? value.replaceAll(environment.META_API_ACCESS_TOKEN, '[redacted]') : value;
     if (Array.isArray(value)) return value.map(redact);
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)
-      .filter(([key]) => !/access.?token|authorization/i.test(key)).map(([key,item]) => [key,redact(item)]));
+      .filter(([key]) => !/access.?token|authorization|tracking_receipt|cnpj_ticket/i.test(key)).map(([key,item]) => [key,redact(item)]));
     return value;
   };
   return async function handler(req, res) {
     if (!protectRequest(req, res)) return;
     const body = req.body;
+    const mode = checkDryRun(req,res,environment);
+    if (mode === 'rejected') return;
     const eventName = body.event_name;
     const eventId = body.event_id;
     if (!['PageView','Scroll','Lead','LeadQualificado'].includes(eventName)
@@ -26,13 +30,27 @@ export function createConversionHandler({fetchImpl = fetch, environment = proces
       || !Number.isInteger(body.event_time) || body.event_time <= 0) {
       return res.status(400).json({success:false, error:'Evento inválido.'});
     }
+    if (mode === 'dry') {
+      logger.info(JSON.stringify({event:'conversion_api_dry_run',event_id:eventId,event_name:eventName,dry_run:true}));
+      return res.status(200).json({success:true,dry_run:true,skipped_meta:true,skipped_persistence:true,skipped_webhook:true});
+    }
+    const leadEvent = ['Lead','LeadQualificado'].includes(eventName);
+    const receipt = leadEvent ? readLeadReceipt(body.tracking_receipt,environment.CNPJ_PREFETCH_SIGNING_SECRET) : null;
+    if (leadEvent && (isTestLead(body.nome_loja) || receipt?.is_test)) {
+      logger.info(JSON.stringify({event:'test_lead_conversion_skipped',event_id:eventId,is_test:true}));
+      return res.status(200).json({success:true,skipped_test:true});
+    }
+    if (leadEvent && (!receipt || body.submission_id !== receipt.submission_id || eventId !== `${receipt.submission_id}:${eventName}`)) {
+      return res.status(403).json({success:false,error:'Recibo de cadastro inválido.'});
+    }
 
     let prepared = null;
     const logError = (msg, details = {}) => logger.error(JSON.stringify(redact({
       level:'error', msg, event:'conversion_api_event_error',
       project:environment.VERCEL_PROJECT_NAME || 'republic-paradise-landing-page', route:'/api/meta/conversions',
       received_at:new Date().toISOString(), request_id:req.headers['x-vercel-id'] || req.headers['x-request-id'] || null,
-      event_name:eventName, event_id:eventId, request_payload:body, prepared_meta_payload:prepared, ...details,
+      event_name:eventName, event_id:eventId, submission_id:receipt?.submission_id,
+      request_payload:{...body,tracking_receipt:undefined}, prepared_meta_payload:prepared, ...details,
     })));
     try {
       const userData = {};
@@ -56,16 +74,13 @@ export function createConversionHandler({fetchImpl = fetch, environment = proces
       }]};
       const production = environment.VERCEL_ENV ? environment.VERCEL_ENV === 'production' : environment.NODE_ENV === 'production';
       if (!production && environment.META_TEST_EVENT_CODE) prepared.test_event_code = environment.META_TEST_EVENT_CODE;
-      const dryRun = enabled(req.headers['x-vfx-dry-run'])
-        || ['dry_run','dryRun','vfx_dry_run','skip_webhook'].some(key => enabled(body[key]));
       logger.info(JSON.stringify({
         level:'info', msg:'conversion_api_event_backup', event:'conversion_api_event_backup',
         project:environment.VERCEL_PROJECT_NAME || 'republic-paradise-landing-page', route:'/api/meta/conversions',
-        event_name:eventName, event_id:eventId, custom_data:customData, dry_run:dryRun,
+        event_name:eventName, event_id:eventId, submission_id:receipt?.submission_id, custom_data:customData,
         user_data_presence:Object.fromEntries(Object.entries(userData).map(([key,value]) => [key,Boolean(value)])),
         received_at:new Date().toISOString(), prepared_meta_payload:prepared,
       }));
-      if (dryRun) return res.status(200).json({success:true, dry_run:true, skipped_meta:true});
       const pixelId = environment.META_PIXEL_ID || environment.VITE_META_PIXEL_ID;
       if (!/^\d+$/.test(pixelId || '') || !environment.META_API_ACCESS_TOKEN) {
         logError('meta_configuration_missing');

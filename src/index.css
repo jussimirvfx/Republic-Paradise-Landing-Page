@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: 'Montserrat'; font-style: normal; font-weight: 300 900; font-display: swap;
+  src: url('/fonts/montserrat-normal-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Montserrat'; font-style: italic; font-weight: 300 900; font-display: swap;
+  src: url('/fonts/montserrat-italic-latin.woff2') format('woff2');
+}
+
 @theme {
   --font-sans: 'Montserrat', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-serif: 'Montserrat', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -49,6 +58,11 @@
 
 .animate-bounce-gentle {
   animation: bounce-gentle 2.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-bounce-gentle { animation: none; }
+  html { scroll-behavior: auto; }
 }
 
 @keyframes float-gentle {

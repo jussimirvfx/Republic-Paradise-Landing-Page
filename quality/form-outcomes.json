@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "standard_sha": "0ddb91fe51dec26b705929e8143a79fd635d4d00",
+  "confirmation": "lp_api_backup_and_scheduled_delivery",
+  "backup_mode": "server_logs_only",
+  "lp_api_path": "/api/leads",
+  "delivery_runtime": "waitUntil",
+  "n8n_workflow_id": "6OBAnnId0mkMCL2p",
+  "webhook_node_name": "Webhook",
+  "rejections": [],
+  "no_business_rejections": true,
+  "cnpj_enrichment": "optional_server_authoritative",
+  "test_marker": {"field":"nomeLoja","comparison":"normalized_prefix","value":"teste mais lojistas","destination":"existing_sheet_only","lead_conversions":false},
+  "acceptance_fields": ["ok","accepted","delivery_scheduled","submission_id","tracking_receipt"],
+  "dry_run": {"path":"/?dry_run=1","capability_path":"/api/dry-run-status","server_flag":"LP_DRY_RUN_ENABLED","browser_navigation_pixel":"normal","business_delivery":false,"server_meta":false}
+}

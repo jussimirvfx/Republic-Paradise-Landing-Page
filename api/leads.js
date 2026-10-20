@@ -4,19 +4,32 @@ import { digits, formatPhone, isValidCnpj, maskCnpj, storeTypes, validPhone, isT
 import { lookupCnpj } from '../lib/cnpj-central.js';
 import { readTicket } from '../lib/cnpj-ticket.js';
 import { calculateLeadScore } from '../lib/lead-score.js';
+import { checkDryRun, dryRunReceipt } from '../lib/dry-run.js';
+import { issueLeadReceipt } from '../lib/lead-receipt.js';
 
 export function createLeadHandler({schedule = waitUntil, fetchImpl = fetch, lookup = lookupCnpj, environment = process.env, logger = console} = {}) {
   return function handler(req, res) {
     if (!protectRequest(req, res)) return;
     const form = req.body;
     const fields = ['nomeProprietario','nomeLoja','whatsapp','email','cnpj','instagramLoja','tipoLoja','possuiLojaFisica','principaisMarcas'];
+    const mode = checkDryRun(req,res,environment);
+    if (mode === 'rejected') return;
+    const submissionId = typeof form.submission_id === 'string' && /^[a-f\d-]{36}$/i.test(form.submission_id)
+      ? form.submission_id : crypto.randomUUID();
+    if (mode === 'normal') {
+      try {
+        const attempt = Object.fromEntries([...fields,'url'].filter(key=>Object.hasOwn(form,key)).map(key=>[key,form[key]]));
+        logger.info(JSON.stringify({event:'landing_form_attempt_backup',submission_id:submissionId,
+          received_at:new Date().toISOString(),source:'republic-paradise-landing-page',
+          is_test:isTestLead(form.nomeLoja),payload:attempt}));
+      } catch {return res.status(503).json({ok:false,error:'Não foi possível receber seu cadastro. Tente novamente.',submission_id:submissionId});}
+    }
     if (fields.some(key => typeof form[key] !== 'string' || !form[key].trim() || form[key].length > 300)
       || !validPhone(form.whatsapp) || !isValidCnpj(form.cnpj) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())
       || !storeTypes.includes(form.tipoLoja) || !['Sim','Não'].includes(form.possuiLojaFisica)) {
       return res.status(400).json({ok:false, error:'Confira os campos obrigatórios, o WhatsApp e o CNPJ.'});
     }
-    if (form.dry_run === true) return res.status(200).json({ok:true, dry_run:true, skipped_delivery:true, skipped_lookup:true});
-    const submissionId = crypto.randomUUID();
+    if (mode === 'dry') return res.status(200).json({...dryRunReceipt,submission_id:submissionId});
     const host = req.headers['x-forwarded-host'] || req.headers.host;
     let pageUrl = `https://${host}/`;
     try {
@@ -34,6 +47,7 @@ export function createLeadHandler({schedule = waitUntil, fetchImpl = fetch, look
     try {
       const destination = new URL(environment.N8N_REPUBLIC_PARADISE_WEBHOOK_URL);
       if (destination.protocol !== 'https:' || destination.hostname !== 'n8n.agenciavfx.com.br' || !destination.pathname.startsWith('/webhook/')) throw new Error('Invalid destination');
+      const trackingReceipt = issueLeadReceipt({submission_id:submissionId,is_test:payload.is_test},environment.CNPJ_PREFETCH_SIGNING_SECRET);
       logger.info(JSON.stringify({event:'lead_delivery_backup', submission_id:submissionId, payload}));
       let scheduled = false;
       const delivery = Promise.resolve().then(async () => {
@@ -59,9 +73,9 @@ export function createLeadHandler({schedule = waitUntil, fetchImpl = fetch, look
       });
       schedule(delivery);
       scheduled = true;
-      return res.status(200).json({ok:true, submission_id:submissionId, accepted:true});
+      return res.status(200).json({ok:true, submission_id:submissionId, accepted:true, delivery_scheduled:true, tracking_receipt:trackingReceipt});
     } catch {
-      return res.status(503).json({ok:false, error:'Não foi possível receber seu cadastro. Tente novamente.'});
+      return res.status(503).json({ok:false, error:'Não foi possível receber seu cadastro. Tente novamente.',submission_id:submissionId});
     }
   };
 }

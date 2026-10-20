@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ArrowRight, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
-import { cnpjMessage, digits, isValidCnpj, maskCnpj, maskPhone, storeTypes, validPhone } from '../lib/validation.js';
+import { cnpjMessage, digits, isValidCnpj, maskCnpj, editPhone, formatPhone, phoneE164, isTestLead, storeTypes, validPhone } from '../lib/validation.js';
 import { calculateLeadScore } from '../lib/lead-score.js';
-import { isTrackingDryRun, updateAdvancedMatching, useLeadTracking } from './metaTracking';
+import { isTrackingDryRun, useLeadTracking } from './metaTracking';
 
 type CnpjLookup = {
   cnpj:string;
@@ -21,6 +21,24 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const sending = useRef(false);
   const lookupCache = useRef<CnpjLookup | null>(null);
+  const submissionId = useRef('');
+  const previousPhone = useRef('');
+  const dryRun = isTrackingDryRun();
+  const [dryRunReady,setDryRunReady] = useState(!dryRun);
+  const [dryRunError,setDryRunError] = useState('');
+  useEffect(()=>{
+    if(!dryRun)return;
+    let cancelled=false;
+    if(new URLSearchParams(window.location.search).get('dry_run') !== '1') {
+      setDryRunError('Modo de teste inválido. Nenhum cadastro será enviado.');return;
+    }
+    void fetch('/api/dry-run-status').then(r=>r.json()).then(result=>{
+      if(cancelled)return;
+      if(result.ok === true && result.enabled === true)setDryRunReady(true);
+      else setDryRunError('Modo de teste indisponível. Nenhum cadastro será enviado.');
+    }).catch(()=>{if(!cancelled)setDryRunError('Não foi possível confirmar o modo de teste. Nenhum cadastro será enviado.');});
+    return()=>{cancelled=true;};
+  },[dryRun]);
   const [formData, setFormData] = useState({
     nomeProprietario: '',
     nomeLoja: '',
@@ -35,27 +53,27 @@ export default function App() {
 
   const galleryImages = [
     {
-      src: '/galeria-1-homem.jpg',
+      src: '/galeria-1-homem.webp',
       alt: 'Moda masculina Republic Paradise',
     },
     {
-      src: '/galeria-2-mulher.jpg',
+      src: '/galeria-2-mulher.webp',
       alt: 'Moda feminina Republic Paradise',
     },
     {
-      src: '/galeria-3-menino.jpg',
+      src: '/galeria-3-menino.webp',
       alt: 'Moda infantil Republic Paradise',
     },
     {
-      src: '/galeria-4-homem.jpg',
+      src: '/galeria-4-homem.webp',
       alt: 'Moda masculina Republic Paradise',
     },
     {
-      src: '/galeria-5-mulher.jpg',
+      src: '/galeria-5-mulher.webp',
       alt: 'Moda feminina Republic Paradise',
     },
     {
-      src: '/galeria-6-menino.jpg',
+      src: '/galeria-6-menino.webp',
       alt: 'Moda infantil Republic Paradise',
     },
   ];
@@ -105,11 +123,11 @@ export default function App() {
 
   const prefetchCnpj = (value:string) => {
     const cnpj = digits(value);
+    if(dryRun && !dryRunReady)return;
     if (!isValidCnpj(cnpj) || lookupCache.current?.cnpj === cnpj) return;
     const entry:CnpjLookup = {cnpj, failed:false, company:null};
     lookupCache.current = entry;
     entry.promise = (async () => { try {
-      const dryRun = new URLSearchParams(window.location.search).get('dry_run') === '1';
       const response = await fetch('/api/cnpj', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cnpj, dry_run:dryRun})});
       const result = await response.json();
       if (lookupCache.current !== entry) return;
@@ -149,10 +167,14 @@ export default function App() {
     e.preventDefault();
     if (sending.current) return;
     const form = e.currentTarget;
+    if(dryRun && !dryRunReady) {setSubmitError(dryRunError || 'Aguarde a confirmação do modo de teste.');return;}
+    // Autofill may change the visible input without a React change event.
+    const visiblePhone = (form.elements.namedItem('whatsapp') as HTMLInputElement).value;
+    const submittedForm = {...formData,whatsapp:formatPhone(visiblePhone)};
     setSubmitError('');
     setFieldError('');
     setCnpjError(cnpjMessage(formData.cnpj));
-    setPhoneError(validPhone(formData.whatsapp) ? '' : 'Informe um DDD válido e 8 números, ou 9 números começando por 9.');
+    setPhoneError(validPhone(visiblePhone) ? '' : 'Informe um DDD válido e 8 números, ou 9 números começando por 9.');
     const fields = Array.from(form.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select'));
     const invalid = fields.find(field => !field.value.trim() || !field.checkValidity()
       || (field.id === 'cnpj' && !isValidCnpj(field.value))
@@ -170,20 +192,27 @@ export default function App() {
     }
     sending.current = true;
     setIsSubmitting(true);
+    submissionId.current ||= crypto.randomUUID();
     try {
       const cache = lookupCache.current?.cnpj === digits(formData.cnpj) ? lookupCache.current : null;
-      const dryRun = new URLSearchParams(window.location.search).get('dry_run') === '1';
       const response = await fetch('/api/leads', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({...formData, url:window.location.href, dry_run:dryRun, cnpj_ticket:cache?.ticket, cnpj_lookup_failed:cache?.failed === true}),
+        body:JSON.stringify({...submittedForm, submission_id:submissionId.current, url:window.location.href, dry_run:dryRun, cnpj_ticket:cache?.ticket, cnpj_lookup_failed:cache?.failed === true}),
       });
       const result = await response.json();
-      if (!response.ok || result.ok !== true) throw new Error('API rejected lead');
+      if(dryRun) {
+        if(!response.ok || result.ok !== true || result.dry_run !== true || !['skipped_webhook','skipped_persistence','skipped_meta','skipped_lookup'].every(key=>result[key] === true)) throw new Error('Invalid dry-run receipt');
+        console.info('Dry-run confirmado: payload que seria enviado, sem consulta, cadastro ou CAPI.',{...submittedForm,submission_id:submissionId.current,url:window.location.href,dry_run:true,qualification_status:'not_evaluated'});
+        setSubmitted(true);return;
+      }
+      if (!response.ok || result.ok !== true || result.accepted !== true || result.delivery_scheduled !== true
+        || result.submission_id !== submissionId.current || typeof result.tracking_receipt !== 'string'
+        || !result.tracking_receipt.trim() || result.tracking_receipt.length > 5000) throw new Error('API rejected lead');
       setSubmitted(true);
       // Reutiliza a consulta em andamento sem atrasar a confirmação do cadastro.
       void (async () => {
         await cache?.promise;
-        const scoring = calculateLeadScore(formData, cache?.company);
+        const scoring = calculateLeadScore(submittedForm, cache?.company);
         console.group('Lead scoring — Republic Paradise');
         console.log('Nota final:', scoring.lead_score, '/ 100');
         console.table(scoring.score_breakdown);
@@ -193,21 +222,18 @@ export default function App() {
         if (scoring.qualification_status === 'pendente_dados_cnpj') console.warn('Pontuação parcial: dados cadastrais do CNPJ indisponíveis.');
         console.log('lead_score_calculated', scoring);
         console.groupEnd();
-        if (isTrackingDryRun() || !tracking) {
-          console.info('[META PIXEL] Dry-run: envio à Meta desativado.');
-          return;
-        }
+        if (isTestLead(submittedForm.nomeLoja) || !tracking) return;
         const leadData = {
-          name:formData.nomeProprietario.trim(), email:formData.email.trim(), phone:`+55${digits(formData.whatsapp)}`,
+          name:submittedForm.nomeProprietario.trim(), email:submittedForm.email.trim(), phone:phoneE164(visiblePhone),
           city:cache?.company?.endereco?.cidade || '', state:cache?.company?.endereco?.estado || '',
           zip:cache?.company?.endereco?.cep || '', country:'BR',
           value:scoring.lead_score, lead_score:scoring.lead_score, currency:'BRL',
           content_name:'Cadastro de Lojista Republic Paradise', content_category:'Lead Generation',
         };
-        updateAdvancedMatching(leadData);
+        const context = {nome_loja:submittedForm.nomeLoja,submission_id:submissionId.current,tracking_receipt:result.tracking_receipt};
         await Promise.allSettled([
-          tracking.trackLead(leadData),
-          ...(scoring.qualified && scoring.lead_score >= 50 ? [tracking.trackLeadQualificado(leadData)] : []),
+          tracking.trackLead(leadData,context),
+          ...(scoring.qualified && scoring.lead_score >= 50 ? [tracking.trackLeadQualificado(leadData,context)] : []),
         ]);
       })().catch(error => console.warn('[META PIXEL] Falha no tracking após o cadastro:', error));
     } catch {
@@ -222,11 +248,18 @@ export default function App() {
         <section className="relative min-h-[100dvh] sm:min-h-[640px] md:min-h-[700px] lg:min-h-[92vh] flex flex-col justify-between sm:justify-center items-center overflow-hidden pt-4 pb-8 sm:py-20 md:py-24 lg:py-48 px-6">
           {/* Background image & gradient overlay */}
           <div className="absolute inset-0 z-0">
-            <img
-              src="/hero.png"
+            <picture>
+              <source media="(max-width: 639px) and (orientation: portrait)" srcSet="/hero-mobile.webp" />
+              <img
+              id="hero-image"
+              src="/hero-desktop.webp"
+              width={1920}
+              height={1000}
+              fetchPriority="high"
               alt="Moda resort Republic Paradise"
               className="w-full h-full object-cover object-[30%_center] sm:object-center"
             />
+            </picture>
             <div className="absolute inset-0 bg-gradient-to-b from-black/45 via-black/30 to-black/50"></div>
           </div>
 
@@ -291,11 +324,16 @@ export default function App() {
                     <div className="text-center py-8 space-y-4">
                       <CheckCircle2 className="w-12 h-12 text-[#181C2E] mx-auto stroke-[1.5]" />
                       <p className="text-lg text-[#181C2E] font-semibold">
-                        Nossa equipe comercial entrará em contato pelo WhatsApp.
+                        {dryRun ? 'Teste concluído. Nenhum cadastro foi enviado.' : 'Nossa equipe comercial entrará em contato pelo WhatsApp.'}
                       </p>
+                      <p className="text-sm text-[#181C2E]">{dryRun ? 'Consulta de CNPJ, planilha, mensagens e conversões de cadastro permaneceram bloqueadas.' : 'Recebemos seu cadastro para processamento.'}</p>
                     </div>
                   ) : (
                     <form onSubmit={handleSubmit} noValidate className="space-y-6">
+                      {dryRun && <div role="status" className="bg-[#72462b] text-white p-4 text-sm">
+                        Modo de teste: cadastro e CNPJ bloqueados. Pixel normal ativo. Use dados fictícios.
+                        {!dryRunReady && <p className="mt-2">{dryRunError || 'Confirmando os bloqueios do modo de teste...'}</p>}
+                      </div>}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                         {/* 1. Nome completo proprietário */}
                         <div>
@@ -337,13 +375,34 @@ export default function App() {
                           <input
                             type="tel"
                             id="whatsapp"
+                            name="whatsapp"
+                            autoComplete="tel-national"
                             required
                             inputMode="tel"
-                            maxLength={15}
                             aria-invalid={Boolean(phoneError)}
                             aria-describedby={phoneError ? 'whatsapp-error' : undefined}
-                            value={formData.whatsapp}
-                            onChange={(e) => { setPhoneError(''); setFormData({ ...formData, whatsapp: maskPhone(e.target.value) }); }}
+                            defaultValue=""
+                            onFocus={e=>{previousPhone.current=e.currentTarget.value;}}
+                            onBeforeInput={e=>{previousPhone.current=e.currentTarget.value;}}
+                            onPaste={e=>{previousPhone.current=e.currentTarget.value;}}
+                            onChange={(e) => {
+                              const input=e.currentTarget, raw=input.value, cursor=input.selectionStart;
+                              const result=editPhone(raw,previousPhone.current,(e.nativeEvent as InputEvent).inputType);
+                              if(input.value !== result.value)input.value=result.value;
+                              previousPhone.current=result.value;
+                              setPhoneError(result.error);setFormData(prev=>({...prev,whatsapp:result.value}));
+                              if(cursor !== null && cursor<raw.length) {
+                                const before=digits(raw.slice(0,cursor)).length;
+                                let index=0,count=0;
+                                while(index<result.value.length && count<before) {if(/\d/.test(result.value[index]))count++;index++;}
+                                queueMicrotask(()=>{if(document.activeElement===input)input.setSelectionRange(index,index);});
+                              }
+                            }}
+                            onBlur={e=>{
+                              // Submit validates after the click, so inserting an error cannot move its target before mouseup.
+                              if((e.relatedTarget as HTMLButtonElement | null)?.type === 'submit')return;
+                              setPhoneError(validPhone(e.currentTarget.value)?'':'Informe um DDD válido e 8 números, ou 9 números começando por 9.');
+                            }}
                             placeholder="(00) 00000-0000"
                             className="w-full px-4 py-3.5 bg-white border border-[#cb9f69] text-[#181C2E] text-sm placeholder:text-[#181C2E]/40 focus:outline-none focus:border-[#181C2E] focus:ring-1 focus:ring-[#181C2E] transition-all shadow-[0_1px_2px_rgba(0,0,0,0.02)]"
                           />
@@ -462,7 +521,7 @@ export default function App() {
                         {submitError && <p role="alert" className="text-sm text-[#8C3A32]">{submitError}</p>}
                         <button
                           type="submit"
-                          disabled={isSubmitting}
+                          disabled={isSubmitting || (dryRun && !dryRunReady)}
                           className="w-full py-3.5 sm:py-4 px-4 sm:px-6 bg-[#181C2E] text-white text-[11px] sm:text-xs leading-snug sm:leading-normal uppercase tracking-[0.09em] sm:tracking-[0.2em] font-semibold hover:bg-[#252b45] active:scale-[0.99] transition-all flex items-center justify-center gap-2 sm:gap-3 cursor-pointer shadow-lg text-center"
                         >
                           <span>{isSubmitting ? 'Enviando cadastro...' : 'Quero receber o catálogo de atacado'}</span>
@@ -523,6 +582,10 @@ export default function App() {
                       <img
                         src={img.src}
                         alt={img.alt}
+                        width={720}
+                        height={900}
+                        loading="lazy"
+                        decoding="async"
                         referrerPolicy="no-referrer"
                         className="w-full h-full object-cover"
                       />
@@ -559,6 +622,10 @@ export default function App() {
                   <img
                     src={img.src}
                     alt={img.alt}
+                    width={720}
+                    height={900}
+                    loading="lazy"
+                    decoding="async"
                     referrerPolicy="no-referrer"
                     className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
                   />
