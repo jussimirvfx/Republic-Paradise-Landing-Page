@@ -35,28 +35,28 @@ export default function App() {
 
   const galleryImages = [
     {
-      src: 'https://frwfcibbvbj5zog7.public.blob.vercel-storage.com/geral/1-1791204087875.webp',
-      alt: 'Republic Paradise Coleção 1',
+      src: '/galeria-1-homem.jpg',
+      alt: 'Moda masculina Republic Paradise',
     },
     {
-      src: 'https://frwfcibbvbj5zog7.public.blob.vercel-storage.com/geral/2-1791204087952.webp',
-      alt: 'Republic Paradise Coleção 2',
+      src: '/galeria-2-mulher.jpg',
+      alt: 'Moda feminina Republic Paradise',
     },
     {
-      src: 'https://frwfcibbvbj5zog7.public.blob.vercel-storage.com/geral/3-1791204087980.webp',
-      alt: 'Republic Paradise Coleção 3',
+      src: '/galeria-3-menino.jpg',
+      alt: 'Moda infantil Republic Paradise',
     },
     {
-      src: 'https://frwfcibbvbj5zog7.public.blob.vercel-storage.com/geral/4-1791204088101.webp',
-      alt: 'Republic Paradise Coleção 4',
+      src: '/galeria-4-homem.jpg',
+      alt: 'Moda masculina Republic Paradise',
     },
     {
-      src: 'https://frwfcibbvbj5zog7.public.blob.vercel-storage.com/geral/5-1791204088052.webp',
-      alt: 'Republic Paradise Coleção 5',
+      src: '/galeria-5-mulher.jpg',
+      alt: 'Moda feminina Republic Paradise',
     },
     {
-      src: 'https://frwfcibbvbj5zog7.public.blob.vercel-storage.com/geral/6-1791204087914.webp',
-      alt: 'Republic Paradise Coleção 6',
+      src: '/galeria-6-menino.jpg',
+      alt: 'Moda infantil Republic Paradise',
     },
   ];
 
@@ -223,9 +223,8 @@ export default function App() {
           {/* Background image & gradient overlay */}
           <div className="absolute inset-0 z-0">
             <img
-              src="https://frwfcibbvbj5zog7.public.blob.vercel-storage.com/geral/hero-2-1791200599492.webp"
+              src="/hero.png"
               alt="Moda resort Republic Paradise"
-              referrerPolicy="no-referrer"
               className="w-full h-full object-cover object-[30%_center] sm:object-center"
             />
             <div className="absolute inset-0 bg-gradient-to-b from-black/45 via-black/30 to-black/50"></div>
